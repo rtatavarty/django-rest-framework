@@ -22,7 +22,6 @@ from django.db import models
 from django.forms import widgets
 from django.utils import six
 from django.utils.datastructures import SortedDict
-from django.utils.functional import cached_property
 from django.core.exceptions import ObjectDoesNotExist
 from rest_framework.settings import api_settings
 
@@ -198,6 +197,7 @@ class BaseSerializer(WritableField):
         self.init_data = data
         self.init_files = files
         self.object = instance
+        self.fields = self.get_fields()
 
         self._data = None
         self._files = None
@@ -211,10 +211,6 @@ class BaseSerializer(WritableField):
 
     #####
     # Methods to determine which fields to use when (de)serializing objects.
-
-    @cached_property
-    def fields(self):
-        return self.get_fields()
 
     def get_default_fields(self):
         """
@@ -682,6 +678,9 @@ class ModelSerializer(Serializer):
             "Serializer class '%s' is missing 'model' Meta option" %
             self.__class__.__name__
         )
+	#XXX: Disabling few things for cqlengine models.
+	if cls._meta.concrete_model is None:
+		return SortedDict()
         opts = cls._meta.concrete_model._meta
         ret = SortedDict()
         nested = bool(self.opts.depth)
@@ -849,7 +848,7 @@ class ModelSerializer(Serializer):
         }
 
         if model_field:
-            kwargs['required'] = not(model_field.null or model_field.blank) and model_field.editable
+            kwargs['required'] = not(model_field.null or model_field.blank)
             if model_field.help_text is not None:
                 kwargs['help_text'] = model_field.help_text
             if model_field.verbose_name is not None:
@@ -872,7 +871,7 @@ class ModelSerializer(Serializer):
         """
         kwargs = {}
 
-        if model_field.null or model_field.blank and model_field.editable:
+        if model_field.null or model_field.blank:
             kwargs['required'] = False
 
         if isinstance(model_field, models.AutoField) or not model_field.editable:
@@ -957,6 +956,10 @@ class ModelSerializer(Serializer):
         so that subclasses can override `.restore_object()`, and still get
         the full_clean validation checking.
         """
+	#XXX: Disabling few things for cqlengine models.
+	full_clean_attr = getattr(instance, "full_clean", None)
+	if full_clean_attr is None:
+	    return instance
         try:
             instance.full_clean(exclude=self.get_validation_exclusions(instance))
         except ValidationError as err:
@@ -973,30 +976,32 @@ class ModelSerializer(Serializer):
         nested_forward_relations = {}
         meta = self.opts.model._meta
 
-        # Reverse fk or one-to-one relations
-        for (obj, model) in meta.get_all_related_objects_with_model():
-            field_name = obj.get_accessor_name()
-            if field_name in attrs:
-                related_data[field_name] = attrs.pop(field_name)
+	#XXX: Disabling few things for cqlengine models.
+	if isinstance(self.opts.model, models.Model):
+	        # Reverse fk or one-to-one relations
+	        for (obj, model) in meta.get_all_related_objects_with_model():
+	            field_name = obj.get_accessor_name()
+	            if field_name in attrs:
+	                related_data[field_name] = attrs.pop(field_name)
 
-        # Reverse m2m relations
-        for (obj, model) in meta.get_all_related_m2m_objects_with_model():
-            field_name = obj.get_accessor_name()
-            if field_name in attrs:
-                m2m_data[field_name] = attrs.pop(field_name)
+	        # Reverse m2m relations
+	        for (obj, model) in meta.get_all_related_m2m_objects_with_model():
+	            field_name = obj.get_accessor_name()
+	            if field_name in attrs:
+	                m2m_data[field_name] = attrs.pop(field_name)
 
-        # Forward m2m relations
-        for field in meta.many_to_many + meta.virtual_fields:
-            if isinstance(field, GenericForeignKey):
-                continue
-            if field.name in attrs:
-                m2m_data[field.name] = attrs.pop(field.name)
+	        # Forward m2m relations
+	        for field in meta.many_to_many + meta.virtual_fields:
+	            if isinstance(field, GenericForeignKey):
+	                continue
+	            if field.name in attrs:
+	                m2m_data[field.name] = attrs.pop(field.name)
 
-        # Nested forward relations - These need to be marked so we can save
-        # them before saving the parent model instance.
-        for field_name in attrs.keys():
-            if isinstance(self.fields.get(field_name, None), Serializer):
-                nested_forward_relations[field_name] = attrs[field_name]
+	        # Nested forward relations - These need to be marked so we can save
+	        # them before saving the parent model instance.
+	        for field_name in attrs.keys():
+	            if isinstance(self.fields.get(field_name, None), Serializer):
+	                nested_forward_relations[field_name] = attrs[field_name]
 
         # Create an empty instance of the model
         if instance is None:
@@ -1024,7 +1029,8 @@ class ModelSerializer(Serializer):
         """
         instance = super(ModelSerializer, self).from_native(data, files)
         if not self._errors:
-            return self.full_clean(instance)
+	    return instance
+            #XXX: disable for cqlengine return self.full_clean(instance)
 
     def save_object(self, obj, **kwargs):
         """
@@ -1130,7 +1136,7 @@ class HyperlinkedModelSerializer(ModelSerializer):
         }
 
         if model_field:
-            kwargs['required'] = not(model_field.null or model_field.blank) and model_field.editable
+            kwargs['required'] = not(model_field.null or model_field.blank)
             if model_field.help_text is not None:
                 kwargs['help_text'] = model_field.help_text
             if model_field.verbose_name is not None:
